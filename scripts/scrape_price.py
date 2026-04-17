@@ -3,10 +3,10 @@
 价格爬取核心脚本
 支持淘宝、京东、拼多多
 
-反爬策略:
-1. 京东: 使用官方价格API (p.3.cn)
-2. 淘宝: 使用移动端接口或联盟API
-3. 拼多多: 使用多多客SDK或App签名
+方案:
+1. 京东: 使用官方API (p.3.cn)
+2. 淘宝/天猫: Playwright 浏览器自动化
+3. 拼多多: Playwright 浏览器自动化
 """
 
 import json
@@ -16,7 +16,6 @@ import os
 import time
 import random
 from urllib.parse import urlparse
-from datetime import datetime
 
 try:
     import requests
@@ -56,21 +55,17 @@ PLATFORMS = {
     }
 }
 
-# 模拟移动端 User-Agent
 USER_AGENTS = [
     'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
     'Mozilla/5.0 (Linux; Android 10; SM-G960F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.152 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
 ]
 
 
 def get_headers():
-    """获取随机化的请求头"""
     return {
         'User-Agent': random.choice(USER_AGENTS),
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         'Accept': 'application/json, text/plain, */*',
-        'Referer': 'https://www.google.com/',
     }
 
 
@@ -87,12 +82,9 @@ def detect_platform(url: str) -> tuple[str, str]:
 def scrape_jd_price(product_id: str) -> dict:
     """京东价格爬取 - 使用官方API"""
     try:
-        # 京东价格接口 (无需登录)
         url = f'https://p.3.cn/prices/mgets?skuIds=J_{product_id}&type=1'
-
         resp = requests.get(url, headers=get_headers(), timeout=10)
         resp.raise_for_status()
-
         data = resp.json()
         if data and len(data) > 0:
             price_info = data[0]
@@ -104,157 +96,169 @@ def scrape_jd_price(product_id: str) -> dict:
                 'lowest_price': float(price_info.get('l', 0)) if price_info.get('l') else None,
                 'highest_price': float(price_info.get('m', 0)) if price_info.get('m') else None,
                 'status': 'success',
-                'raw': price_info
             }
     except Exception as e:
-        return {
-            'platform': 'jd',
-            'product_id': product_id,
-            'status': 'error',
-            'error': str(e)
-        }
-
+        return {'platform': 'jd', 'product_id': product_id, 'status': 'error', 'error': str(e)}
     return {'platform': 'jd', 'product_id': product_id, 'status': 'no_data'}
 
 
-def scrape_jd_detail(product_id: str) -> dict:
-    """获取京东商品详情"""
+def scrape_with_playwright(url: str, platform: str) -> dict:
+    """
+    使用 Playwright 浏览器自动化爬取
+    支持淘宝、天猫、拼多多
+    """
     try:
-        # 京东商品信息接口
-        url = f'https://api.m.jd.com/client.action?functionId=productDetail&productId={product_id}'
-
-        headers = get_headers()
-        headers['Referer'] = 'https://item.jd.com/'
-
-        resp = requests.get(url, headers=headers, timeout=10)
-        data = resp.json()
-
-        if data.get('result'):
-            result = data['result']
-            return {
-                'title': result.get('productName', ''),
-                'shop': result.get('shopInfo', {}).get('name', ''),
-                'image': result.get('imageList', [{}])[0].get('url', '') if result.get('imageList') else '',
-            }
-    except Exception as e:
-        pass
-
-    return {}
-
-
-def scrape_taobao(product_id: str) -> dict:
-    """淘宝/天猫价格爬取"""
-    try:
-        # 淘宝移动端价格接口
-        url = f'https://api.m.tmall.com/api/mtop.taobao.detail.getprice/3.2/'
-
-        headers = get_headers()
-        headers['Referer'] = 'https://m.tmall.com/'
-
-        params = {
-            'itemId': product_id,
-            'detail_v': '3.0',
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {
+            'platform': platform,
+            'status': 'error',
+            'error': '请先安装 playwright: pip install playwright && playwright install chromium'
         }
 
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-
-        # 尝试备用接口
-        if resp.status_code != 200:
-            # 淘宝老接口
-            url2 = f'https://m.tmall.com/h5/mtop.taobao.detail.getprice/3.2/'
-            resp = requests.get(url2, headers=headers, params=params, timeout=10)
-
-        if resp.status_code == 200:
-            data = resp.json()
-            return {
-                'platform': 'taobao',
-                'product_id': product_id,
-                'price': data.get('data', {}).get('price', {}).get('data', {}).get('price', 0),
-                'title': data.get('data', {}).get('itemInfoModel', {}).get('title', ''),
-                'status': 'success'
-            }
-
-    except Exception as e:
-        pass
-
-    # 返回占位数据，需要用户配置cookie
-    return {
-        'platform': 'taobao',
-        'product_id': product_id,
-        'price': None,
-        'title': None,
-        'status': 'need_cookie',
-        'message': '淘宝需要登录cookie才能获取价格，请在 scripts/config.py 中配置'
+    result = {
+        'platform': platform,
+        'status': 'error',
+        'url': url,
+        'error': '未找到价格元素'
     }
 
-
-def scrape_pinduoduo(product_id: str) -> dict:
-    """拼多多价格爬取 - 使用App签名"""
     try:
-        # 拼多多移动端API
-        url = 'https://mobile.yangkeduo.com/api-proxy-server/duo_coupon_local_goods/detail'
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+                locale='zh-CN'
+            )
+            page = context.new_page()
 
-        headers = get_headers()
-        headers['Referer'] = 'https://mobile.yangkeduo.com/'
-        headers['Content-Type'] = 'application/json'
+            # 设置超时
+            page.set_default_timeout(30000)
 
-        data = {
-            'goods_id': product_id,
-            'pdduid': random.randint(1000000000000, 9999999999999),
-            'version': '1.0.0',
-        }
+            # 访问页面
+            page.goto(url, wait_until='networkidle')
 
-        resp = requests.post(url, headers=headers, json=data, timeout=10)
+            # 随机延迟
+            time.sleep(random.uniform(2, 4))
 
-        if resp.status_code == 200:
-            result = resp.json()
-            # 拼多多返回格式需要分析
-            return {
-                'platform': 'pinduoduo',
-                'product_id': product_id,
-                'price': result.get('goods', {}).get('group_price') or result.get('price'),
-                'title': result.get('goods', {}).get('goods_name', ''),
-                'status': 'success',
-                'raw': result
-            }
+            if platform in ('taobao', 'tmall'):
+                # 淘宝/天猫价格选择器
+                try:
+                    # 尝试多个可能的选择器
+                    selectors = [
+                        '.price span',           # 常见价格 class
+                        '.tm-price',             # 天猫价格
+                        '.originPrice',          # 原价
+                        '[class*="price"]',      # 包含 price 的 class
+                        '.goods-price',          # 商品价格
+                    ]
+                    price = None
+                    for sel in selectors:
+                        try:
+                            elements = page.locator(sel).all()
+                            for el in elements:
+                                text = el.inner_text()
+                                # 匹配价格格式
+                                price_match = re.search(r'[\d.]+', text)
+                                if price_match and float(price_match.group()) > 0:
+                                    price = float(price_match.group())
+                                    break
+                        except:
+                            continue
+                        if price:
+                            break
+
+                    # 获取标题
+                    title_selectors = ['.tb-title h3', '.goods-title', '[class*="title"]', 'h3']
+                    title = ''
+                    for sel in title_selectors:
+                        try:
+                            title = page.locator(sel).first.inner_text()
+                            break
+                        except:
+                            continue
+
+                    if price:
+                        result = {
+                            'platform': platform,
+                            'product_id': '',
+                            'price': price,
+                            'title': title.strip() if title else '',
+                            'status': 'success',
+                        }
+                except Exception as e:
+                    result['error'] = str(e)
+
+            elif platform == 'pinduoduo':
+                try:
+                    # 拼多多价格选择器
+                    selectors = [
+                        '.goods-price .price',
+                        '.price-content',
+                        '[class*="price"] .value',
+                    ]
+                    price = None
+                    for sel in selectors:
+                        try:
+                            el = page.locator(sel).first
+                            text = el.inner_text()
+                            price_match = re.search(r'[\d.]+', text)
+                            if price_match:
+                                price = float(price_match.group())
+                                break
+                        except:
+                            continue
+
+                    # 获取标题
+                    title = ''
+                    for sel in ['.goods-name', '.goods-title', '[class*="name"]']:
+                        try:
+                            title = page.locator(sel).first.inner_text()
+                            break
+                        except:
+                            continue
+
+                    if price:
+                        result = {
+                            'platform': platform,
+                            'product_id': '',
+                            'price': price,
+                            'title': title.strip() if title else '',
+                            'status': 'success',
+                        }
+                except Exception as e:
+                    result['error'] = str(e)
+
+            browser.close()
 
     except Exception as e:
-        pass
+        result['error'] = str(e)
 
-    return {
-        'platform': 'pinduoduo',
-        'product_id': product_id,
-        'price': None,
-        'title': None,
-        'status': 'blocked',
-        'message': '拼多多反爬较强，建议配置代理或使用多多客API'
-    }
+    return result
 
 
-SCRAPERS = {
-    'taobao': scrape_taobao,
-    'tmall': scrape_taobao,  # 天猫复用淘宝接口
-    'jd': scrape_jd_price,
-    'pinduoduo': scrape_pinduoduo,
-}
-
-
-def scrape_product(platform: str, product_id: str) -> dict:
+def scrape_product(platform: str, product_id: str = None, url: str = None) -> dict:
     """爬取商品价格"""
-    if platform not in SCRAPERS:
-        return {'status': 'error', 'message': f'不支持的平台: {platform}'}
+    # 京东直接用API
+    if platform == 'jd':
+        time.sleep(random.uniform(1, 2))
+        return scrape_jd_price(product_id)
 
-    # 添加随机延迟，避免请求过快
-    time.sleep(random.uniform(1, 3))
+    # 淘宝/天猫/拼多多用 Playwright
+    if platform in ('taobao', 'tmall', 'pinduoduo'):
+        if url:
+            return scrape_with_playwright(url, platform)
 
-    return SCRAPERS[platform](product_id)
+    return {'status': 'error', 'message': f'不支持的平台: {platform}'}
 
 
 def main():
     if len(sys.argv) < 2:
         print("用法:")
-        print("  python scrape_price.py parse <url>  # 解析链接")
-        print("  python scrape_price.py <platform> <product_id>  # 获取价格")
+        print("  python scrape_price.py parse <url>     # 解析链接")
+        print("  python scrape_price.py jd <product_id>  # 京东价格")
+        print("  python scrape_price.py taobao <url>     # 淘宝/天猫价格")
+        print("  python scrape_price.py pinduoduo <url>  # 拼多多价格")
         sys.exit(1)
 
     if sys.argv[1] == 'parse':
@@ -273,9 +277,19 @@ def main():
         return
 
     platform = sys.argv[1]
-    product_id = sys.argv[2]
 
-    result = scrape_product(platform, product_id)
+    if platform == 'jd':
+        if len(sys.argv) < 3:
+            print("用法: python scrape_price.py jd <product_id>")
+            sys.exit(1)
+        result = scrape_product('jd', product_id=sys.argv[2])
+    else:
+        # 淘宝/拼多多直接传URL
+        if len(sys.argv) < 3:
+            print(f"用法: python scrape_price.py {platform} <url>")
+            sys.exit(1)
+        result = scrape_product(platform, url=sys.argv[2])
+
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

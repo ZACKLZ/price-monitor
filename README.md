@@ -6,11 +6,9 @@
 
 ## 安装
 
-复制到 Claude Code plugins 目录：
-
 ```bash
 # 克隆仓库
-git clone <repo-url> price-monitor
+git clone https://github.com/ZACKLZ/price-monitor.git
 
 # 移动到 plugins 目录
 mv price-monitor ~/.claude/plugins/price-monitor
@@ -20,7 +18,8 @@ mv price-monitor ~/.claude/plugins/price-monitor
 
 1. 安装依赖：
 ```bash
-pip install requests beautifulsoup4
+pip install requests playwright
+playwright install chromium
 ```
 
 2. 配置 OpenClaw/Hermes 推送（可选）：
@@ -80,6 +79,14 @@ price-monitor/
 └── data/
     └── products.json      # 商品数据
 ```
+
+## 平台限制说明
+
+| 平台 | API 可用性 | 推荐方案 |
+|------|-----------|---------|
+| 京东 | ✅ 官方 API 可直接使用 | API 请求 |
+| 淘宝/天猫 | ❌ 个人用户无法申请 | Playwright |
+| 拼多多 | ❌ 仅面向商家 | Playwright |
 
 ## 免责声明
 
