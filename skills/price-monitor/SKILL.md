@@ -6,7 +6,9 @@ version: 1.0.0
 
 # Price Monitor Skill
 
-实时监控淘宝、京东、拼多多商品价格，每日推送价格变动通知。
+实时监控淘宝、京东、拼多多商品价格，通过 OpenClaw/Hermes 每日推送价格变动通知。
+
+适用于 OpenClaw/Hermes 机器人框架。
 
 ## 功能概述
 
@@ -80,13 +82,16 @@ python scripts/scrape_price.py <platform> <product_id>
 
 ```
 /schedule daily 9:00 price-monitor/daily-report
+/schedule daily 9:00 price-monitor/daily-report --chat <target>
 ```
 
 或使用 cron:
 
 ```
-0 9 * * * <path-to-scripts>/daily_report.sh
+0 9 * * * python3 <path-to>/scripts/daily_report.py
 ```
+
+推送目标可通过 Hermes/OpenClaw 配置默认发送对象。
 
 ## 参考资料
 

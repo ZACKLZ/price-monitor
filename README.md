@@ -1,6 +1,8 @@
 # Price Monitor Plugin
 
-监控淘宝、京东、拼多多商品价格，通过 Hermes 每日推送通知。
+监控淘宝、京东、拼多多商品价格，通过 OpenClaw/Hermes 每日推送通知。
+
+适用于 OpenClaw/Hermes 机器人框架。
 
 ## 安装
 
@@ -21,7 +23,7 @@ mv price-monitor ~/.claude/plugins/price-monitor
 pip install requests beautifulsoup4
 ```
 
-2. 配置Hermes推送（可选）：
+2. 配置 OpenClaw/Hermes 推送（可选）：
 ```
 /hermes set daily-price-notification true
 ```
@@ -48,9 +50,10 @@ pip install requests beautifulsoup4
 ```
 
 ### 定时推送
-设置每日推送（Hermes）：
+设置每日推送：
 ```
 /schedule daily 9:00 price-monitor/daily-report
+/schedule daily 9:00 price-monitor/daily-report --chat <target>
 ```
 
 ## 定时任务
