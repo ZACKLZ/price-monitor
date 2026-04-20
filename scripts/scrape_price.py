@@ -102,6 +102,65 @@ def scrape_jd_price(product_id: str) -> dict:
     return {'platform': 'jd', 'product_id': product_id, 'status': 'no_data'}
 
 
+def create_stealth_browser_context():
+    """
+    创建反检测浏览器上下文
+    伪装真实浏览器特征，减少被反爬机制识别
+    """
+    from playwright.sync_api import sync_playwright
+
+    p = sync_playwright().start()
+    browser = p.chromium.launch(
+        headless=True,
+        args=[
+            '--disable-blink-features=AutomationControlled',
+            '--disable-dev-shm-usage',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process',
+        ]
+    )
+
+    # 随机屏幕分辨率
+    viewports = [
+        {'width': 1920, 'height': 1080},
+        {'width': 1536, 'height': 864},
+        {'width': 1366, 'height': 768},
+        {'width': 1440, 'height': 900},
+    ]
+    viewport = random.choice(viewports)
+
+    context = browser.new_context(
+        viewport=viewport,
+        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        locale='zh-CN,zh',
+        timezone_id='Asia/Shanghai',
+        geolocation={'latitude': 31.2304, 'longitude': 121.4737},
+        permissions=['geolocation'],
+        extra_http_headers={
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        }
+    )
+
+    # 注入脚本伪装 webdriver
+    context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5]
+        });
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['zh-CN', 'zh', 'en']
+        });
+        window.chrome = { runtime: {} };
+    """)
+
+    return p, browser, context
+
+
 def scrape_with_playwright(url: str, platform: str) -> dict:
     """
     使用 Playwright 浏览器自动化爬取
@@ -123,116 +182,128 @@ def scrape_with_playwright(url: str, platform: str) -> dict:
         'error': '未找到价格元素'
     }
 
+    p = None
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
-                locale='zh-CN'
-            )
-            page = context.new_page()
+        p, browser, context = create_stealth_browser_context()
+        page = context.new_page()
 
-            # 设置超时
-            page.set_default_timeout(30000)
+        # 设置超时
+        page.set_default_timeout(30000)
 
-            # 访问页面
-            page.goto(url, wait_until='networkidle')
+        # 访问页面
+        page.goto(url, wait_until='domcontentloaded')
 
-            # 随机延迟
-            time.sleep(random.uniform(2, 4))
+        # 模拟人类浏览行为 - 随机滚动
+        page.evaluate("""
+            window.scrollTo(0, Math.random() * 500);
+        """)
 
-            if platform in ('taobao', 'tmall'):
-                # 淘宝/天猫价格选择器
-                try:
-                    # 尝试多个可能的选择器
-                    selectors = [
-                        '.price span',           # 常见价格 class
-                        '.tm-price',             # 天猫价格
-                        '.originPrice',          # 原价
-                        '[class*="price"]',      # 包含 price 的 class
-                        '.goods-price',          # 商品价格
-                    ]
-                    price = None
-                    for sel in selectors:
-                        try:
-                            elements = page.locator(sel).all()
-                            for el in elements:
-                                text = el.inner_text()
-                                # 匹配价格格式
-                                price_match = re.search(r'[\d.]+', text)
-                                if price_match and float(price_match.group()) > 0:
-                                    price = float(price_match.group())
-                                    break
-                        except:
-                            continue
-                        if price:
-                            break
+        # 随机延迟 3-6 秒（模拟人类阅读）
+        time.sleep(random.uniform(3, 6))
 
-                    # 获取标题
-                    title_selectors = ['.tb-title h3', '.goods-title', '[class*="title"]', 'h3']
-                    title = ''
-                    for sel in title_selectors:
-                        try:
-                            title = page.locator(sel).first.inner_text()
-                            break
-                        except:
-                            continue
+        # 再次滚动
+        page.evaluate("""
+            window.scrollTo(0, Math.random() * 300);
+        """)
 
-                    if price:
-                        result = {
-                            'platform': platform,
-                            'product_id': '',
-                            'price': price,
-                            'title': title.strip() if title else '',
-                            'status': 'success',
-                        }
-                except Exception as e:
-                    result['error'] = str(e)
-
-            elif platform == 'pinduoduo':
-                try:
-                    # 拼多多价格选择器
-                    selectors = [
-                        '.goods-price .price',
-                        '.price-content',
-                        '[class*="price"] .value',
-                    ]
-                    price = None
-                    for sel in selectors:
-                        try:
-                            el = page.locator(sel).first
+        if platform in ('taobao', 'tmall'):
+            # 淘宝/天猫价格选择器
+            try:
+                # 尝试多个可能的选择器
+                selectors = [
+                    '.price span',           # 常见价格 class
+                    '.tm-price',             # 天猫价格
+                    '.originPrice',          # 原价
+                    '[class*="price"]',      # 包含 price 的 class
+                    '.goods-price',          # 商品价格
+                ]
+                price = None
+                for sel in selectors:
+                    try:
+                        elements = page.locator(sel).all()
+                        for el in elements:
                             text = el.inner_text()
+                            # 匹配价格格式
                             price_match = re.search(r'[\d.]+', text)
-                            if price_match:
+                            if price_match and float(price_match.group()) > 0:
                                 price = float(price_match.group())
                                 break
-                        except:
-                            continue
-
-                    # 获取标题
-                    title = ''
-                    for sel in ['.goods-name', '.goods-title', '[class*="name"]']:
-                        try:
-                            title = page.locator(sel).first.inner_text()
-                            break
-                        except:
-                            continue
-
+                    except:
+                        continue
                     if price:
-                        result = {
-                            'platform': platform,
-                            'product_id': '',
-                            'price': price,
-                            'title': title.strip() if title else '',
-                            'status': 'success',
-                        }
-                except Exception as e:
-                    result['error'] = str(e)
+                        break
 
-            browser.close()
+                # 获取标题
+                title_selectors = ['.tb-title h3', '.goods-title', '[class*="title"]', 'h3']
+                title = ''
+                for sel in title_selectors:
+                    try:
+                        title = page.locator(sel).first.inner_text()
+                        break
+                    except:
+                        continue
+
+                if price:
+                    result = {
+                        'platform': platform,
+                        'product_id': '',
+                        'price': price,
+                        'title': title.strip() if title else '',
+                        'status': 'success',
+                    }
+            except Exception as e:
+                result['error'] = str(e)
+
+        elif platform == 'pinduoduo':
+            try:
+                # 拼多多价格选择器
+                selectors = [
+                    '.goods-price .price',
+                    '.price-content',
+                    '[class*="price"] .value',
+                ]
+                price = None
+                for sel in selectors:
+                    try:
+                        el = page.locator(sel).first
+                        text = el.inner_text()
+                        price_match = re.search(r'[\d.]+', text)
+                        if price_match:
+                            price = float(price_match.group())
+                            break
+                    except:
+                        continue
+
+                # 获取标题
+                title = ''
+                for sel in ['.goods-name', '.goods-title', '[class*="name"]']:
+                    try:
+                        title = page.locator(sel).first.inner_text()
+                        break
+                    except:
+                        continue
+
+                if price:
+                    result = {
+                        'platform': platform,
+                        'product_id': '',
+                        'price': price,
+                        'title': title.strip() if title else '',
+                        'status': 'success',
+                    }
+            except Exception as e:
+                result['error'] = str(e)
+
+        browser.close()
+        p.stop()
 
     except Exception as e:
         result['error'] = str(e)
+        if p:
+            try:
+                p.stop()
+            except:
+                pass
 
     return result
 
